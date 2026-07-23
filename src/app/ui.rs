@@ -8,7 +8,23 @@ use std::sync::Arc;
 /// Builds the egui UI for the current frame and returns any commands produced by widget
 /// interaction (buttons etc.) so the caller can feed them back through
 /// `App::handle_command` - mirrors `green-vita`'s `build_ui` shape.
+
+fn apply_theme(ctx: &egui::Context) {
+    let mut visuals = egui::Visuals::dark();
+    // Default egui 0.31 dark theme already looks decent
+    
+    // Style scrollbar to be thinner and darker
+    let mut style = (*ctx.style()).clone();
+    style.spacing.scroll.bar_width = 4.0;
+    style.spacing.scroll.bar_inner_margin = 0.0;
+    style.spacing.scroll.bar_outer_margin = 0.0;
+    ctx.set_style(style);
+    ctx.set_visuals(visuals);
+}
+
+
 pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
+    apply_theme(ctx);
     let mut commands = Vec::new();
 
     match &app.state {
@@ -50,18 +66,22 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
             search_query,
             search_requested,
             covers,
-        } => game_detail_screen(
-            ctx,
-            user,
-            games,
-            *selected,
-            filtered_indices,
-            search_query,
-            *search_requested,
-            covers,
-            &app.http_client,
-            app.status_note.as_deref(),
-        ),
+        } => {
+            if let Some(cmd) = game_detail_screen(
+                ctx,
+                user,
+                games,
+                *selected,
+                filtered_indices,
+                search_query,
+                *search_requested,
+                covers,
+                &app.http_client,
+                app.status_note.as_deref(),
+            ) {
+                commands.push(cmd);
+            }
+        },
         AppState::CreatingSession {
             user,
             games,
@@ -176,7 +196,7 @@ fn login_screen(ctx: &egui::Context, app: &App) {
             ui.heading("Jade Vita");
             ui.label("Cliente no oficial de GeForce NOW para PS Vita");
             ui.add_space(24.0);
-            ui.label("Pulsa Confirmar (✕) para iniciar sesión con tu cuenta de NVIDIA.");
+            ui.label("Pulsa Confirmar ([X]) para iniciar sesión con tu cuenta de NVIDIA.");
             ui.add_space(24.0);
             if let Some(last_input) = app.last_input {
                 ui.weak(format!("Última entrada detectada: {last_input:?}"));
@@ -217,7 +237,7 @@ fn device_code_screen(ctx: &egui::Context, challenge: &crate::gfn::auth::DeviceC
                 ui.label("2. O escanea el código QR e introduce este código:");
                 ui.add_space(12.0);
                 egui::Frame::NONE
-                    .fill(egui::Color32::from_rgb(0x26, 0x27, 0x2c))
+                    .fill(egui::Color32::from_rgb(0x14, 0x14, 0x14))
                     .corner_radius(12.0)
                     .inner_margin(egui::Margin::symmetric(28, 20))
                     .show(ui, |ui| {
@@ -265,33 +285,60 @@ fn catalog_screen(
     status_note: Option<&str>,
 ) -> Option<AppCommand> {
     let mut search_command: Option<AppCommand> = None;
-    let panel_frame = egui::Frame::NONE;
+    let panel_frame = egui::Frame::NONE.inner_margin(16.0);
+
+    egui::TopBottomPanel::bottom("catalog_footer")
+        .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(0x14, 0x14, 0x14)).inner_margin(8.0))
+        .show(ctx, |ui| {
+            if let Some(note) = status_note {
+                ui.label(egui::RichText::new(note).italics());
+            }
+            ui.label("Arriba/Abajo/Izquierda/Derecha para navegar · Confirmar (X) para ver detalle · Atras (O) para volver");
+        });
+
     egui::CentralPanel::default()
         .frame(panel_frame)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Catálogo de GeForce NOW");
+                ui.heading(
+                    egui::RichText::new("Jade Vita")
+                        .strong()
+                        .size(28.0)
+                        .color(egui::Color32::from_rgb(0x76, 0xb9, 0x00))
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Avatar placeholder
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 18.0, egui::Color32::from_rgb(0x76, 0xb9, 0x00));
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        user.display_name.chars().next().unwrap_or('?').to_string(),
+                        egui::FontId::proportional(20.0),
+                        egui::Color32::from_rgb(0x14, 0x14, 0x14),
+                    );
+                    
+                    ui.add_space(8.0);
                     ui.vertical(|ui| {
-                        ui.label(&user.display_name);
+                        ui.label(egui::RichText::new(&user.display_name).strong().color(egui::Color32::WHITE));
                         if let Some(email) = &user.email {
                             ui.weak(email);
                         }
                     });
                 });
             });
-            ui.separator();
+            ui.add_space(8.0);
 
             // Search box. On the Vita the user will typically need a system keyboard or
             // touch input to edit it; the d-pad still moves the grid selection when the box
             // is not focused.
             let mut query = search_query.to_owned();
             ui.horizontal(|ui| {
-                ui.label("Buscar:");
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut query)
-                        .hint_text("escribe el titulo...")
-                        .desired_width(300.0),
+                        .hint_text("[ ] Buscar juegos...") // using [ ] instead of emoji to avoid rendering issues
+                        .desired_width(ui.available_width() - 80.0) // Take up more space
+                        .margin(egui::vec2(12.0, 8.0)) // Padding inside the search bar
                 );
                 if search_requested && !response.has_focus() {
                     response.request_focus();
@@ -303,7 +350,11 @@ fn catalog_screen(
                     search_command = Some(AppCommand::SetSearchQuery(query));
                 }
                 let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("Buscar").clicked() || enter_pressed || (search_requested && response.lost_focus()) {
+                let search_btn = ui.add_sized(
+                    [60.0, 30.0],
+                    egui::Button::new("Buscar").fill(egui::Color32::from_rgb(0x2c, 0x2c, 0x2c))
+                );
+                if search_btn.clicked() || enter_pressed || (search_requested && response.lost_focus()) {
                     search_command = Some(AppCommand::CloseSearch);
                 }
             });
@@ -365,19 +416,13 @@ fn catalog_screen(
                         // scroll area follow the active tile so it stays visible without the
                         // user having to drag the touchscreen.
                         if let Some(response) = selected_response {
-                            response.scroll_to_me(Some(egui::Align::Center));
+                            // Using None instead of Center prevents the ScrollArea from 
+                            // fighting the layout and causing a continuous 1-pixel "vibration".
+                            response.scroll_to_me(None);
                         }
                     });
             }
 
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                ui.add_space(6.0);
-                if let Some(note) = status_note {
-                    ui.label(egui::RichText::new(note).italics());
-                }
-                ui.label("Arriba/Abajo/Izquierda/Derecha para navegar · Confirmar (X) para ver detalle · Atras (O) para volver");
-                ui.separator();
-            });
         });
     search_command
 }
@@ -415,16 +460,16 @@ fn draw_tile(
             painter.rect_filled(
                 bg,
                 12.0,
-                egui::Color32::from_rgba_premultiplied(0x4d, 0xa8, 0xff, 60),
+                egui::Color32::from_rgba_premultiplied(0x76, 0xb9, 0x00, 60),
             );
         }
 
         let tile_frame_color = if selected {
-            egui::Color32::from_rgb(0x6c, 0xc4, 0xff)
+            egui::Color32::from_rgb(0x76, 0xb9, 0x00)
         } else {
-            egui::Color32::from_rgb(0x3a, 0x3c, 0x44)
+            egui::Color32::from_rgb(0x2c, 0x2c, 0x2c)
         };
-        painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(0x1a, 0x1c, 0x22));
+        painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(0x0e, 0x0e, 0x0e));
         painter.rect_stroke(
             rect,
             8.0,
@@ -509,7 +554,7 @@ fn draw_tile(
         ui.painter().rect_stroke(
             response.response.rect,
             10.0,
-            egui::Stroke::new(4.0_f32, egui::Color32::from_rgb(0x6c, 0xc4, 0xff)),
+            egui::Stroke::new(4.0_f32, egui::Color32::from_rgb(0x76, 0xb9, 0x00)),
             egui::StrokeKind::Outside,
         );
     }
@@ -528,10 +573,13 @@ fn game_detail_screen(
     covers: &CoverStore,
     http_client: &Client,
     status_note: Option<&str>,
-) {
+) -> Option<AppCommand> {
+    let mut command: Option<AppCommand> = None;
+
     let Some(game) = games.get(selected) else {
         // Should never happen, but render a graceful fallback instead of panicking.
-        return error_screen(ctx, "No se encontró el juego seleccionado.");
+        error_screen(ctx, "No se encontró el juego seleccionado.");
+        return None;
     };
 
     // Kick off a cover download if we don't have it yet; the detail screen needs a big cover.
@@ -539,7 +587,18 @@ fn game_detail_screen(
         covers.request(http_client, ctx, game.app_id.clone(), url);
     }
 
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::TopBottomPanel::bottom("detail_footer")
+        .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(0x14, 0x14, 0x14)).inner_margin(8.0))
+        .show(ctx, |ui| {
+            if let Some(note) = status_note {
+                ui.label(egui::RichText::new(note).italics());
+            }
+            ui.label("Confirmar (X) para simular lanzamiento · Atras (O) para volver");
+        });
+
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.inner_margin(16.0))
+        .show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.heading("Detalle del juego");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -560,11 +619,11 @@ fn game_detail_screen(
             let (rect, _) =
                 ui.allocate_exact_size(egui::vec2(cover_width, cover_height), egui::Sense::hover());
             let painter = ui.painter_at(rect);
-            painter.rect_filled(rect, 12.0, egui::Color32::from_rgb(0x1a, 0x1c, 0x22));
+            painter.rect_filled(rect, 12.0, egui::Color32::from_rgb(0x0e, 0x0e, 0x0e));
             painter.rect_stroke(
                 rect,
                 12.0,
-                egui::Stroke::new(3.0_f32, egui::Color32::from_rgb(0x3a, 0x3c, 0x44)),
+                egui::Stroke::new(3.0_f32, egui::Color32::from_rgb(0x2c, 0x2c, 0x2c)),
                 egui::StrokeKind::Inside,
             );
 
@@ -611,33 +670,49 @@ fn game_detail_screen(
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
                 ui.add_space(20.0);
-                ui.heading(&game.title);
+                ui.heading(
+                    egui::RichText::new(&game.title)
+                        .size(32.0)
+                        .strong()
+                        .color(egui::Color32::WHITE)
+                );
                 ui.add_space(12.0);
                 ui.label(
-                    egui::RichText::new(format!("appId: {}", game.app_id))
+                    egui::RichText::new(format!("ID de aplicacion: {}", game.app_id))
                         .monospace()
+                        .color(egui::Color32::from_rgb(0xa0, 0xa4, 0xac))
                         .size(14.0),
                 );
-                ui.add_space(24.0);
-                ui.label(
-                    egui::RichText::new("Fase 3 - streaming real aún no implementado.").size(14.0),
+                ui.add_space(32.0);
+
+                // Emulate a big prominent "Play" button like GeForce NOW
+                let button_response = ui.add_sized(
+                    [200.0, 48.0],
+                    egui::Button::new(
+                        egui::RichText::new("JUGAR")
+                            .size(18.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(0x14, 0x14, 0x14))
+                    )
+                    .fill(egui::Color32::from_rgb(0x76, 0xb9, 0x00))
+                    .corner_radius(24.0) // Pill shape
                 );
-                ui.add_space(8.0);
-                ui.label("Pulsa Confirmar (×) para simular el lanzamiento.");
-                ui.add_space(4.0);
-                ui.label("Pulsa Atrás (○) para volver al catálogo.");
+                
+                if button_response.clicked() {
+                    command = Some(crate::input::AppCommand::Input(crate::input::InputCommand::Confirm));
+                }
+
+                ui.add_space(16.0);
+                ui.label(
+                    egui::RichText::new("Usa el boton (X) en tu consola para iniciar la sesion de streaming de este juego en la nube.")
+                        .size(14.0)
+                        .color(egui::Color32::from_rgb(0xa0, 0xa4, 0xac))
+                );
             });
         });
-
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            ui.add_space(6.0);
-            if let Some(note) = status_note {
-                ui.label(egui::RichText::new(note).italics());
-            }
-            ui.label("Confirmar (X) para simular lanzamiento · Atras (O) para volver");
-            ui.separator();
-        });
     });
+
+    command
 }
 
 fn creating_session_screen(
@@ -687,7 +762,7 @@ fn creating_session_screen(
                 if queue_status.queue_position > 0 {
                     ui.label(
                         egui::RichText::new(format!("• Posición en la cola de NVIDIA: #{}", queue_status.queue_position))
-                            .color(egui::Color32::from_rgb(0x00, 0xe6, 0x76))
+                            .color(egui::Color32::from_rgb(0x76, 0xb9, 0x00))
                             .strong()
                             .size(18.0),
                     );
@@ -744,7 +819,7 @@ fn session_ready_screen(
         ui.horizontal(|ui| {
             ui.heading("Sesion lista");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(egui::RichText::new("🛑 Detener Sesión").color(egui::Color32::from_rgb(0xff, 0x6b, 0x6b))).clicked() {
+                if ui.button(egui::RichText::new("[X] Detener Sesión").color(egui::Color32::from_rgb(0xff, 0x6b, 0x6b))).clicked() {
                     command = Some(AppCommand::ToggleConfirmExit);
                 }
                 ui.add_space(10.0);
@@ -789,7 +864,7 @@ fn session_ready_screen(
             if let Some(note) = status_note {
                 ui.label(egui::RichText::new(note).italics());
             }
-            ui.label("Confirmar (X) para conectar · Toca '🛑 Detener Sesión' para salir");
+            ui.label("Confirmar (X) para conectar · Toca '[X] Detener Sesión' para salir");
             ui.separator();
         });
     });
@@ -812,7 +887,7 @@ fn signaling_screen(
         ui.horizontal(|ui| {
             ui.heading("Señalización");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(egui::RichText::new("🛑 Detener Sesión").color(egui::Color32::from_rgb(0xff, 0x6b, 0x6b))).clicked() {
+                if ui.button(egui::RichText::new("[X] Detener Sesión").color(egui::Color32::from_rgb(0xff, 0x6b, 0x6b))).clicked() {
                     command = Some(AppCommand::ToggleConfirmExit);
                 }
                 ui.add_space(10.0);
@@ -847,7 +922,7 @@ fn signaling_screen(
             if let Some(note) = status_note {
                 ui.label(egui::RichText::new(note).italics());
             }
-            ui.label("Toca '🛑 Detener Sesión' o pulsa Atrás (O) para confirmar salida");
+            ui.label("Toca '[X] Detener Sesión' o pulsa Atrás (O) para confirmar salida");
             ui.separator();
         });
     });
@@ -868,11 +943,11 @@ fn confirm_exit_modal(ctx: &egui::Context) -> Option<AppCommand> {
                 ui.label("¿Estás seguro de que deseas salir y cancelar la sesión activa de GeForce NOW?");
                 ui.add_space(18.0);
                 ui.horizontal(|ui| {
-                    if ui.button(" ◀ Volver a la sesión ").clicked() {
+                    if ui.button(" < Volver a la sesión ").clicked() {
                         command = Some(AppCommand::CancelConfirmExit);
                     }
                     ui.add_space(16.0);
-                    if ui.button(egui::RichText::new(" 🛑 Sí, Salir y Detener ").color(egui::Color32::from_rgb(0xff, 0x6b, 0x6b))).clicked() {
+                    if ui.button(egui::RichText::new(" [X] Sí, Salir y Detener ").color(egui::Color32::from_rgb(0xff, 0x6b, 0x6b))).clicked() {
                         command = Some(AppCommand::ConfirmExitSession);
                     }
                 });
@@ -910,7 +985,7 @@ fn streaming_screen(
                     ui.heading("Transmitiendo juego...");
                 }
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new("• Señalización WebRTC e Intercambio SDP Completados").color(egui::Color32::from_rgb(0x00, 0xe6, 0x76)).strong());
+                ui.label(egui::RichText::new("• Señalización WebRTC e Intercambio SDP Completados").color(egui::Color32::from_rgb(0x76, 0xb9, 0x00)).strong());
                 ui.add_space(8.0);
                 // Live pipeline stage from the peer thread - the key diagnostic when the
                 // stream stalls before the first decoded frame.

@@ -707,6 +707,21 @@ impl App {
                         search_requested: false,
                         covers,
                     }
+                } else if !search_query.is_empty() {
+                    // Clear the search query and restore full list
+                    let new_query = String::new();
+                    let new_filtered = (0..games.len()).collect();
+                    // Crucial: trigger a server search for the empty string to restore full catalog
+                    self.search_pending_since = Some(std::time::Instant::now());
+                    AppState::Catalog {
+                        user,
+                        games,
+                        selected: 0,
+                        filtered_indices: new_filtered,
+                        search_query: new_query,
+                        search_requested: false,
+                        covers,
+                    }
                 } else {
                     // Back in the catalog no longer signs out immediately - too easy to hit by
                     // accident. Sign-out will live in a dedicated menu later.
