@@ -1,0 +1,44 @@
+[package]
+name = "jade-vita"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Cliente homebrew no oficial de GeForce NOW para PlayStation Vita"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+bytes = "1"
+crossbeam-channel = "0.5"
+egui = "0.31"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+qrcode = { version = "0.14", default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+ring = "0.17"
+rtc = "0.20.0-rc.2"
+rtc-media = "0.20.0-rc.2"
+rtcp = { version = "0.20.0-rc.2", package = "rtc-rtcp" }
+sdl2 = { version = "0.38", features = ["use-pkgconfig", "unsafe_textures"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots", "url"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+vita-newlib-shims = "0.3"
+vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceKernelDmacMgr_stub", "SceKernelThreadMgr_stub", "SceLibKernel_stub", "SceSysmem_stub", "SceSysmodule_stub", "SceVideodec_stub"] }
+
+[patch.crates-io]
+# Plain crates.io `ring` doesn't build for armv7-sony-vita-newlibeabihf (no libc RNG source
+# it recognizes for this target). green-vita patched it to add one; reused here as-is rather
+# than re-solving the same problem - see THIRD_PARTY_NOTICES.md.
+ring = { git = "https://github.com/vita-rust/ring.git", branch = "v0.17.14-vita" }
+# `rtc-shared` (a transitive dependency of `rtc`/`rtc-media`) needed similar Vita-specific
+# fixes (random/time/socket shims for this target's newlib). Same reasoning as the `ring`
+# patch above - reused from green-vita rather than re-discovered.
+rtc-shared = { git = "https://github.com/Day-OS/rtc.git", branch = "vita" }
+
+[package.metadata.vita]
+title_id = "JADEVITA0"
+title_name = "Jade Vita"
+assets = "static"
