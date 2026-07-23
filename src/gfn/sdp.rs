@@ -180,11 +180,20 @@ pub fn sanitize_offer(offer_sdp: &str, server_ip: &str) -> String {
 
 /// Payload types the offer maps to H264 (`a=rtpmap:<pt> H264/90000`).
 pub fn h264_payload_types(sdp: &str) -> Vec<u8> {
+    rtpmap_payload_types(sdp, "H264/")
+}
+
+/// Payload types the offer maps to Opus (`a=rtpmap:<pt> opus/48000/2`).
+pub fn opus_payload_types(sdp: &str) -> Vec<u8> {
+    rtpmap_payload_types(sdp, "OPUS/")
+}
+
+fn rtpmap_payload_types(sdp: &str, codec_prefix: &str) -> Vec<u8> {
     sdp.lines()
         .filter_map(|line| {
             let rest = line.trim().strip_prefix("a=rtpmap:")?;
             let (pt, codec) = rest.split_once(' ')?;
-            if codec.to_ascii_uppercase().starts_with("H264/") {
+            if codec.to_ascii_uppercase().starts_with(codec_prefix) {
                 pt.parse().ok()
             } else {
                 None

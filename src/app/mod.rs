@@ -379,19 +379,24 @@ impl App {
         Ok(())
     }
 
+    /// Tells CloudMatch to release the session, fired off as a background task so the caller
+    /// (an exit button press, or a disconnect being turned into an error screen) never blocks
+    /// on it. Best-effort: `cloudmatch::stop_session` itself swallows and logs failures rather
+    /// than surfacing them, since there is no user-facing action left to retry from here.
+    fn stop_cloudmatch_session(&self, session: &SessionInfo) {
+        let Some(token) = self.bearer_token().map(str::to_owned) else {
+            return;
+        };
+        let client = self.http_client.clone();
+        let session = session.clone();
+        tokio::spawn(async move {
+            cloudmatch::stop_session(&client, &token, &session).await;
+        });
+    }
+
     fn exit_session(&mut self, state: AppState) -> Result<AppState> {
         let new_state = match state {
             AppState::CreatingSession {
-                user,
-                games,
-                selected,
-                filtered_indices,
-                search_query,
-                search_requested,
-                covers,
-                ..
-            }
-            | AppState::SessionReady {
                 user,
                 games,
                 selected,
@@ -409,6 +414,27 @@ impl App {
                 search_requested,
                 covers,
             },
+            AppState::SessionReady {
+                user,
+                games,
+                selected,
+                filtered_indices,
+                search_query,
+                search_requested,
+                covers,
+                session,
+            } => {
+                self.stop_cloudmatch_session(&session);
+                AppState::GameDetail {
+                    user,
+                    games,
+                    selected,
+                    filtered_indices,
+                    search_query,
+                    search_requested,
+                    covers,
+                }
+            }
             AppState::Signaling {
                 user,
                 games,
@@ -417,6 +443,7 @@ impl App {
                 search_query,
                 search_requested,
                 covers,
+                session,
                 handle,
                 ..
             }
@@ -428,10 +455,17 @@ impl App {
                 search_query,
                 search_requested,
                 covers,
+                session,
                 handle,
                 ..
             } => {
+                // Order matters: close the signaling socket (and, for Streaming, drop `peer` -
+                // implicit here since it's matched away by `..` - which stops its background
+                // thread and releases the direct-video textures/CDRAM) before telling CloudMatch
+                // the session is over, so nothing keeps writing to a session we've just told the
+                // server to tear down.
                 handle.close();
+                self.stop_cloudmatch_session(&session);
                 AppState::GameDetail {
                     user,
                     games,
@@ -1059,15 +1093,20 @@ impl App {
                 mut handle,
                 mut peer,
             } => {
+                let mut fatal_reason: Option<String> = None;
+
                 // Signaling stays alive during streaming: it still trickles NVIDIA's ICE
-                // candidates (forwarded into the peer) and carries our answer out.
+                // candidates (forwarded into the peer) and carries our answer out. Losing it
+                // mid-stream means no more renegotiation is possible, so treat it the same as
+                // the peer itself dying.
                 while let Some(event) = handle.try_recv() {
                     match event {
                         SignalingEvent::RemoteIce(candidate) => {
                             peer.add_remote_ice(candidate);
                         }
                         SignalingEvent::Disconnected(reason) => {
-                            eprintln!("signaling closed during streaming: {reason}");
+                            fatal_reason.get_or_insert(format!("Señalización perdida: {reason}"));
+                            break;
                         }
                         _ => {}
                     }
@@ -1089,27 +1128,55 @@ impl App {
                             self.status_note = Some("Transmisión de vídeo en directo activa".to_owned());
                         }
                         crate::gfn::peer::PeerEvent::Error(err) => {
+                            // Non-fatal (e.g. a rejected trickled ICE candidate, or the
+                            // hardware decoder being unavailable): surfaced for diagnostics,
+                            // but the session may still recover on its own.
                             eprintln!("Streaming peer error: {err}");
                             self.status_note = Some(format!("Peer: {err}"));
                         }
                         crate::gfn::peer::PeerEvent::Disconnected(reason) => {
                             eprintln!("Streaming peer disconnected: {reason}");
-                            self.status_note = Some(format!("Peer desconectado: {reason}"));
+                            fatal_reason
+                                .get_or_insert(format!("Conexión de streaming perdida: {reason}"));
+                            break;
                         }
                     }
                 }
-                self.state = AppState::Streaming {
-                    user,
-                    games,
-                    selected,
-                    filtered_indices,
-                    search_query,
-                    search_requested,
-                    covers,
-                    session,
-                    handle,
-                    peer,
-                };
+
+                if let Some(message) = fatal_reason {
+                    // Order matters, same as a user-initiated exit: stop the signaling socket
+                    // (`peer` is dropped right here along with it, since this match arm doesn't
+                    // bind it further - that runs `PeerEngine::drop`, which stops its thread and
+                    // releases the direct-video textures/CDRAM) before telling CloudMatch the
+                    // session is over.
+                    handle.close();
+                    self.stop_cloudmatch_session(&session);
+                    self.state = AppState::Error {
+                        message,
+                        retry: ErrorRetry::BackToGameDetail {
+                            user,
+                            games,
+                            selected,
+                            filtered_indices,
+                            search_query,
+                            search_requested,
+                            covers,
+                        },
+                    };
+                } else {
+                    self.state = AppState::Streaming {
+                        user,
+                        games,
+                        selected,
+                        filtered_indices,
+                        search_query,
+                        search_requested,
+                        covers,
+                        session,
+                        handle,
+                        peer,
+                    };
+                }
             }
             other => self.state = other,
         }
@@ -1189,6 +1256,7 @@ impl App {
         }
 
         if let Some(reason) = disconnected_reason {
+            self.stop_cloudmatch_session(&session);
             return AppState::Error {
                 message: format!("Señalización desconectada: {reason}"),
                 retry: ErrorRetry::BackToGameDetail {

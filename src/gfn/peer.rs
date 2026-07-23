@@ -18,7 +18,7 @@ use crate::streaming::video::{
     DecodedFrame, DecoderConfig, DirectVideoOutput, VideoDecodeWorker,
 };
 use anyhow::{Context, Result};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use rtc::peer_connection::RTCPeerConnectionBuilder;
 use rtc::peer_connection::configuration::RTCConfigurationBuilder;
 use rtc::peer_connection::configuration::media_engine::MediaEngine;
@@ -45,6 +45,10 @@ use tokio::sync::mpsc;
 // them), so size the decoder from what CloudMatch reports and fall back to GFN's minimum.
 const DEFAULT_STREAM_WIDTH: u32 = 1280;
 const DEFAULT_STREAM_HEIGHT: u32 = 720;
+
+// Sized to match `streaming::audio::MAX_PENDING_OPUS_PACKETS` - this Vec is the layer that
+// feeds that channel, so it shouldn't hold more backlog than the channel behind it does.
+const MAX_PENDING_AUDIO_PACKETS: usize = 6;
 
 /// The resolution NVIDIA actually streams at, per the session response.
 fn stream_dimensions(session: &SessionInfo) -> (u32, u32) {
@@ -87,6 +91,7 @@ pub struct PeerEngine {
     is_connected: Arc<AtomicBool>,
     video_output: Arc<DirectVideoOutput>,
     latest_frame: Arc<Mutex<Option<(u64, DecodedFrame)>>>,
+    pending_audio: Arc<Mutex<Vec<Bytes>>>,
 }
 
 impl PeerEngine {
@@ -97,6 +102,7 @@ impl PeerEngine {
         let (stream_width, stream_height) = stream_dimensions(session);
         let video_output = Arc::new(DirectVideoOutput::new(stream_width, stream_height));
         let latest_frame: Arc<Mutex<Option<(u64, DecodedFrame)>>> = Arc::new(Mutex::new(None));
+        let pending_audio: Arc<Mutex<Vec<Bytes>>> = Arc::new(Mutex::new(Vec::new()));
 
         let setup = PeerSetup {
             offer_sdp: offer_sdp.to_owned(),
@@ -116,6 +122,7 @@ impl PeerEngine {
         let thread_connected = is_connected.clone();
         let thread_output = video_output.clone();
         let thread_frames = latest_frame.clone();
+        let thread_audio = pending_audio.clone();
         std::thread::Builder::new()
             .name("jade-vita-peer".to_owned())
             .spawn(move || {
@@ -139,6 +146,7 @@ impl PeerEngine {
                     thread_connected,
                     thread_output,
                     thread_frames,
+                    thread_audio,
                 ));
                 if let Err(error) = result {
                     let _ = thread_events
@@ -153,6 +161,7 @@ impl PeerEngine {
             is_connected,
             video_output,
             latest_frame,
+            pending_audio,
         })
     }
 
@@ -180,6 +189,15 @@ impl PeerEngine {
 
     pub fn video_frame(&self) -> Option<(u64, DecodedFrame)> {
         *self.latest_frame.lock().ok()?
+    }
+
+    /// Drains and returns whatever Opus packets have arrived since the last call - meant to
+    /// be fed straight into `streaming::audio::AudioRenderer::submit_packets` once per frame.
+    pub fn take_audio_packets(&self) -> Vec<Bytes> {
+        self.pending_audio
+            .lock()
+            .map(|mut queue| std::mem::take(&mut *queue))
+            .unwrap_or_default()
     }
 }
 
@@ -219,6 +237,7 @@ async fn run_peer(
     is_connected: Arc<AtomicBool>,
     video_output: Arc<DirectVideoOutput>,
     latest_frame: Arc<Mutex<Option<(u64, DecodedFrame)>>>,
+    pending_audio: Arc<Mutex<Vec<Bytes>>>,
 ) -> Result<()> {
     // --- Hardware decode worker (sets `decoder_ready` so the shell creates the textures) ---
     let decode_worker = match VideoDecodeWorker::spawn(
@@ -249,6 +268,7 @@ async fn run_peer(
     let _ = std::fs::write("ux0:data/jade-vita/offer-raw.sdp", &setup.offer_sdp);
     let _ = std::fs::write("ux0:data/jade-vita/offer-sanitized.sdp", &sanitized_offer);
     let video_payload_types = crate::gfn::sdp::h264_payload_types(&sanitized_offer);
+    let audio_payload_types = crate::gfn::sdp::opus_payload_types(&sanitized_offer);
 
     let mut media_engine = MediaEngine::default();
     media_engine
@@ -430,6 +450,22 @@ async fn run_peer(
                         "Recibiendo RTP (payload type {})",
                         packet.header.payload_type
                     )));
+                }
+                if audio_payload_types.contains(&packet.header.payload_type) {
+                    // Opus packets are already complete frames on the wire - no
+                    // depacketization needed, just hand the RTP payload to the decoder. Capped
+                    // and discard-oldest so a delayed shell-frame drain can't let this grow
+                    // into an ever-larger stale backlog (mirrors the gamepad
+                    // pending_commands/latest_gamepad coalescing below, adapted to keep a short
+                    // *ordered* run of packets rather than collapsing to one, since Opus frames
+                    // must decode in sequence).
+                    if let Ok(mut queue) = pending_audio.lock() {
+                        if queue.len() >= MAX_PENDING_AUDIO_PACKETS {
+                            queue.remove(0);
+                        }
+                        queue.push(packet.payload.clone());
+                    }
+                    continue;
                 }
                 let is_video = video_payload_types.is_empty()
                     || video_payload_types.contains(&packet.header.payload_type);

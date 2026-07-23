@@ -10,7 +10,8 @@ use crate::input::{
     gamepad_snapshot, held_menu_direction, map_controller_button_event, map_keyboard_event,
     map_pointer_event, open_first_controller, register_vita_controller_mapping,
 };
-use anyhow::Result;
+use crate::streaming::audio::AudioRenderer;
+use anyhow::{Context, Result};
 use std::time::{Duration, Instant};
 use surface::{HEIGHT, VitaSurface, WIDTH};
 use tokio::time::sleep;
@@ -26,11 +27,14 @@ pub(crate) const TARGET_FRAME_TIME: Duration = Duration::from_millis(16);
 pub async fn run(mut app: App) -> Result<()> {
     let sdl = sdl2::init().map_err(anyhow::Error::msg)?;
     let video = sdl.video().map_err(anyhow::Error::msg)?;
+    let audio = sdl.audio().map_err(anyhow::Error::msg)?;
     register_vita_controller_mapping(&sdl).map_err(anyhow::Error::msg)?;
     let game_controller_subsystem = sdl.game_controller().map_err(anyhow::Error::msg)?;
     let mut controller = open_first_controller(&game_controller_subsystem);
     let mut event_pump = sdl.event_pump().map_err(anyhow::Error::msg)?;
     let mut surface = VitaSurface::new(&video)?;
+    let mut audio_renderer =
+        AudioRenderer::new(&audio).context("failed to set up audio renderer")?;
     let egui_ctx = egui::Context::default();
     let start_time = Instant::now();
     let mut pointer_pos = egui::Pos2::ZERO;
@@ -133,6 +137,10 @@ pub async fn run(mut app: App) -> Result<()> {
             // Ship the controller state to the game once per frame (~60 Hz) while streaming.
             if let (Some(peer), Some(active_controller)) = (streaming_peer, controller.as_ref()) {
                 peer.send_gamepad(gamepad_snapshot(active_controller));
+            }
+            match streaming_peer {
+                Some(peer) => audio_renderer.submit_packets(peer.take_audio_packets()),
+                None => audio_renderer.submit_packets(Vec::new()),
             }
             streaming_peer.is_some_and(|peer| peer.video_frame().is_some())
         };
