@@ -12,7 +12,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-const MAX_PENDING_ACCESS_UNITS: usize = 4;
+// Two compressed frames of queue (~66ms at 30 fps) - green-vita's minimum. Anything deeper
+// converts network jitter into steady-state latency; when the queue is full we drop instead.
+const MAX_PENDING_ACCESS_UNITS: usize = 2;
 
 struct QueuedAccessUnit {
     data: Vec<u8>,

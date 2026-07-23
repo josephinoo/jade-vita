@@ -369,6 +369,7 @@ async fn run_peer(
     stats_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(2));
     heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut pending_commands: Vec<PeerCommand> = Vec::new();
     const IDLE_TIMEOUT: Duration = Duration::from_secs(86400);
 
     loop {
@@ -503,34 +504,8 @@ async fn run_peer(
             }
             command = command_rx.recv() => {
                 match command {
-                    Some(PeerCommand::RemoteIce(candidate)) => {
-                        let init = RTCIceCandidateInit {
-                            candidate: candidate.candidate,
-                            sdp_mid: candidate.sdp_mid,
-                            sdp_mline_index: candidate.sdp_m_line_index.map(|index| index as u16),
-                            username_fragment: candidate.username_fragment,
-                            ..Default::default()
-                        };
-                        if let Err(error) = pc.add_remote_candidate(init) {
-                            let _ = event_tx.send(PeerEvent::Error(format!(
-                                "remote ICE candidate rejected: {error}"
-                            )));
-                        }
-                    }
-                    Some(PeerCommand::Gamepad(mut input)) => {
-                        if input_ready && let Some(id) = input_channel_id {
-                            input.timestamp_us = session_clock.elapsed().as_micros() as u64;
-                            let packet = input_encoder
-                                .encode_gamepad_state(GAMEPAD_BITMAP_PRIMARY, input);
-                            if let Some(mut channel) = pc.data_channel(id) {
-                                let _ = channel.send(BytesMut::from(&packet[..]));
-                            }
-                        }
-                    }
-                    Some(PeerCommand::Close) | None => {
-                        let _ = pc.close();
-                        return Ok(());
-                    }
+                    Some(command) => pending_commands.push(command),
+                    None => pending_commands.push(PeerCommand::Close),
                 }
             }
             received = socket.recv_from(&mut buf) => {
@@ -551,6 +526,67 @@ async fn run_peer(
                         message: BytesMut::from(&buf[..n]),
                     })?;
                 }
+            }
+        }
+
+        // Latency control: drain everything already queued before the next poll cycle.
+        // Handling one datagram/command per wakeup lets the OS socket buffer (and with it,
+        // glass-to-glass delay) grow without bound during video bursts.
+        while let Ok((n, peer_addr)) = socket.try_recv_from(&mut buf) {
+            match classify(buf.first()) {
+                0 => in_stun += 1,
+                1 => in_dtls += 1,
+                _ => in_media += 1,
+            }
+            pc.handle_read(TaggedBytesMut {
+                now: Instant::now(),
+                transport: TransportContext {
+                    local_addr,
+                    peer_addr,
+                    ecn: None,
+                    transport_protocol: TransportProtocol::UDP,
+                },
+                message: BytesMut::from(&buf[..n]),
+            })?;
+        }
+        while let Ok(command) = command_rx.try_recv() {
+            pending_commands.push(command);
+        }
+
+        // Coalesce queued gamepad snapshots down to the newest one - the game only cares
+        // about current stick/button state, and replaying a backlog adds input latency.
+        let mut latest_gamepad = None;
+        for command in pending_commands.drain(..) {
+            match command {
+                PeerCommand::RemoteIce(candidate) => {
+                    let init = RTCIceCandidateInit {
+                        candidate: candidate.candidate,
+                        sdp_mid: candidate.sdp_mid,
+                        sdp_mline_index: candidate.sdp_m_line_index.map(|index| index as u16),
+                        username_fragment: candidate.username_fragment,
+                        ..Default::default()
+                    };
+                    if let Err(error) = pc.add_remote_candidate(init) {
+                        let _ = event_tx.send(PeerEvent::Error(format!(
+                            "remote ICE candidate rejected: {error}"
+                        )));
+                    }
+                }
+                PeerCommand::Gamepad(input) => latest_gamepad = Some(input),
+                PeerCommand::Close => {
+                    let _ = pc.close();
+                    return Ok(());
+                }
+            }
+        }
+        if let Some(mut input) = latest_gamepad
+            && input_ready
+            && let Some(id) = input_channel_id
+        {
+            input.timestamp_us = session_clock.elapsed().as_micros() as u64;
+            let packet = input_encoder.encode_gamepad_state(GAMEPAD_BITMAP_PRIMARY, input);
+            if let Some(mut channel) = pc.data_channel(id) {
+                let _ = channel.send(BytesMut::from(&packet[..]));
             }
         }
     }
