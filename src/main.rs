@@ -1,5 +1,7 @@
 use vita_newlib_shims as _;
 
+mod i18n;
+mod locale;
 mod app;
 mod gfn;
 mod input;

@@ -29,9 +29,18 @@ egui for the UI, direct-to-texture hardware video decoding, and VPK packaging vi
   [`rtc`](https://github.com/webrtc-rs/rtc) stack (no GStreamer, no browser).
 - **Hardware video decoding** — `sceAvcdec` decodes each access unit straight into SDL/GXM
   textures (green-vita's direct-texture path: zero per-frame allocations, double-buffered,
-  YUV420 with an RGB565 fallback).
+  dynamic YUV420/BGR565 negotiation based on the stream's actual resolution).
+- **Audio playback** — Opus RTP packets decoded via `libopus` and played through SDL2, tuned
+  for low end-to-end latency (small jitter buffers on both audio and video so neither track
+  drifts ahead of the other).
 - **Controller input** — full gamepad state (buttons, sticks) sent 60×/s over the NVST
   `input_channel_v1` data channel in XInput format.
+- **Session resilience** — CloudMatch session polling tolerates transient server errors
+  (isolated 5xx responses from NVIDIA's zone load balancer) instead of aborting a session
+  that would have come up fine on the next poll; disconnects clean up the CloudMatch session
+  server-side instead of leaking it.
+- **Language picker** — a gear icon next to the account avatar on the catalog screen switches
+  the UI between English and Spanish (more languages can be added under `src/i18n/`).
 
 ## Status
 
@@ -41,14 +50,15 @@ egui for the UI, direct-to-texture hardware video decoding, and VPK packaging vi
 | 1 | App skeleton: VitaSDK/`cargo-vita` build, SDL2 + egui loop | ✅ Done |
 | 2 | Authentication + game library | ✅ Done |
 | 3 | Signaling + CloudMatch session lifecycle | ✅ Done |
-| 4 | WebRTC peer, H.264 decode, gamepad input | ✅ Working (validated on Vita3K) |
-| 5 | Audio (Opus), real-hardware validation, polish | 🚧 In progress |
+| 4 | WebRTC peer, H.264 decode, gamepad input | ✅ Working (Vita3K + real PS Vita hardware) |
+| 5 | Audio (Opus), session resilience, UI polish | ✅ Working (Vita3K + real PS Vita hardware) |
+| 6 | Real-hardware validation | ✅ Confirmed working on an original PS Vita |
 
-Known gaps: no audio yet (the Opus track arrives but is discarded); analog triggers/L3/R3
-need a rear-touchpad mapping (the Vita has no such physical controls); real-hardware testing
-pending — development so far has been validated against
-[Vita3K](https://vita3k.org/), whose `sceAvcdec` only implements YUV420 output (the client
-picks the right format at runtime).
+Known gaps: analog triggers/L3/R3 need a rear-touchpad mapping (the Vita has no such physical
+controls); the language picker only ships English/Spanish text so far, the rest of the UI
+outside the catalog screen is still hardcoded Spanish. Development is validated against both
+[Vita3K](https://vita3k.org/) (whose `sceAvcdec` only implements YUV420 output, handled at
+runtime) and real PS Vita hardware.
 
 See `THIRD_PARTY_NOTICES.md` for what is reused from green-vita (MPL-2.0) and what is
 protocol knowledge referenced from OpenNOW.
@@ -88,7 +98,11 @@ src/
   app/                  Application state machine and egui UI
   shell/                Main loop: SDL2 window, egui painter, direct video surface
   input.rs              SDL2 event mapping (keyboard/controller/touch) + XInput snapshots
-  streaming/video/      Direct-texture video pipeline: decoder sync, sceAvcdec, decode worker
+  locale.rs             Supported UI locales (currently English/Spanish)
+  i18n.rs, i18n/*.ftl   Fluent-based UI translations (wired into the catalog screen so far)
+  streaming/
+    video/              Direct-texture video pipeline: decoder sync, sceAvcdec, decode worker
+    audio.rs            Opus RTP decode + SDL2 audio playback
   gfn/
     auth.rs             NVIDIA device-code OAuth + encrypted token storage
     catalog.rs          Game library (GraphQL) + server-side search

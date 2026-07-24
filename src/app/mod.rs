@@ -7,6 +7,7 @@ use crate::gfn::covers::CoverStore;
 use crate::gfn::signaling::{self, SignalingEvent, SignalingHandle};
 use crate::input::{AppCommand, InputCommand};
 use crate::jobs::{PollJob, poll_job};
+use crate::locale::Locale;
 use anyhow::Result;
 use reqwest::Client;
 use std::sync::Arc;
@@ -217,6 +218,11 @@ pub struct App {
     /// debounce elapses if the user hasn't typed anything new since.
     last_dispatched_search_query: Option<String>,
     pub(crate) confirm_exit: bool,
+    /// UI display language, changed via the gear icon next to the avatar in the catalog
+    /// screen. Currently only the language picker itself reads/writes this - most of the UI
+    /// still has its Spanish strings hardcoded (see `src/i18n.rs` for the (unwired) fluent
+    /// setup that would translate the rest).
+    pub(crate) locale: Locale,
 }
 
 impl App {
@@ -250,6 +256,7 @@ impl App {
             search_pending_since: None,
             last_dispatched_search_query: None,
             confirm_exit: false,
+            locale: Locale::EsEs,
         })
     }
 
@@ -285,6 +292,10 @@ impl App {
             AppCommand::ConfirmExitSession => {
                 self.confirm_exit = false;
                 self.exit_session(current_state)?
+            }
+            AppCommand::SetLocale(locale) => {
+                self.locale = locale;
+                current_state
             }
             AppCommand::Input(input) => {
                 self.last_input = Some(input);
@@ -553,7 +564,7 @@ impl App {
                 } else {
                     let selected = move_in_grid(
                         filtered_indices.len(),
-                        GRID_COLUMNS,
+                        1,
                         selected,
                         GridStep::Down,
                     );
@@ -1437,10 +1448,21 @@ impl App {
                     covers: CoverStore::new(),
                 }
             }
-            PollJob::Done(Err(error)) => AppState::Error {
-                message: format!("No se pudo cargar tu biblioteca de juegos: {error:#}"),
-                retry: ErrorRetry::ReloadCatalog(user),
-            },
+            PollJob::Done(Err(error)) => {
+                let err_str = format!("{error:#}");
+                if err_str.contains("401 Unauthorized") || err_str.contains("Invalid or expired token") {
+                    crate::gfn::auth::clear_tokens();
+                    AppState::Error {
+                        message: "Tu sesion ha expirado. Por favor, vuelve a iniciar sesion.".to_owned(),
+                        retry: ErrorRetry::RestartLogin,
+                    }
+                } else {
+                    AppState::Error {
+                        message: format!("No se pudo cargar tu biblioteca de juegos: {err_str}"),
+                        retry: ErrorRetry::ReloadCatalog(user),
+                    }
+                }
+            }
         }
     }
 

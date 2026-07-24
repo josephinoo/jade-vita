@@ -11,6 +11,7 @@ base64 = "0.22"
 bytes = "1"
 crossbeam-channel = "0.5"
 egui = "0.31"
+fluent-bundle = "0.16.0"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 qrcode = { version = "0.14", default-features = false }
@@ -24,6 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots", "url"] }
+unic-langid = "0.9.6"
 uuid = { version = "1", features = ["v4", "v5"] }
 vita-newlib-shims = "0.3"
 vitasdk-sys = { version = "0.3", features = ["SceAppUtil_stub", "SceKernelDmacMgr_stub", "SceKernelThreadMgr_stub", "SceLibKernel_stub", "SceSysmem_stub", "SceSysmodule_stub", "SceVideodec_stub"] }

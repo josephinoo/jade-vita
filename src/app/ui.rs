@@ -54,6 +54,7 @@ pub fn build_ui(ctx: &egui::Context, app: &App) -> Vec<AppCommand> {
                 covers,
                 &app.http_client,
                 app.status_note.as_deref(),
+                app.locale,
             ) {
                 commands.push(command);
             }
@@ -283,9 +284,11 @@ fn catalog_screen(
     covers: &CoverStore,
     http_client: &Client,
     status_note: Option<&str>,
+    locale: crate::locale::Locale,
 ) -> Option<AppCommand> {
     let mut search_command: Option<AppCommand> = None;
     let panel_frame = egui::Frame::NONE.inner_margin(16.0);
+    let i18n = crate::i18n::I18n::new(locale);
 
     egui::TopBottomPanel::bottom("catalog_footer")
         .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(0x14, 0x14, 0x14)).inner_margin(8.0))
@@ -293,7 +296,7 @@ fn catalog_screen(
             if let Some(note) = status_note {
                 ui.label(egui::RichText::new(note).italics());
             }
-            ui.label("Arriba/Abajo/Izquierda/Derecha para navegar · Confirmar (X) para ver detalle · Atras (O) para volver");
+            ui.label(i18n.text("catalog-footer-hint"));
         });
 
     egui::CentralPanel::default()
@@ -317,7 +320,37 @@ fn catalog_screen(
                         egui::FontId::proportional(20.0),
                         egui::Color32::from_rgb(0x14, 0x14, 0x14),
                     );
-                    
+
+                    ui.add_space(8.0);
+
+                    // Language picker: gear icon immediately to the left of the avatar.
+                    let gear_response = ui.add_sized(
+                        [32.0, 32.0],
+                        egui::Button::new(egui::RichText::new("⚙").size(16.0))
+                            .fill(egui::Color32::from_rgb(0x2c, 0x2c, 0x2c)),
+                    );
+                    let language_popup_id = ui.make_persistent_id("language_picker_popup");
+                    if gear_response.clicked() {
+                        ui.memory_mut(|mem| mem.toggle_popup(language_popup_id));
+                    }
+                    egui::popup_below_widget(
+                        ui,
+                        language_popup_id,
+                        &gear_response,
+                        egui::PopupCloseBehavior::CloseOnClick,
+                        |ui| {
+                            ui.set_min_width(180.0);
+                            for candidate in crate::locale::Locale::ALL {
+                                if ui
+                                    .selectable_label(candidate == locale, candidate.label())
+                                    .clicked()
+                                {
+                                    search_command = Some(AppCommand::SetLocale(candidate));
+                                }
+                            }
+                        },
+                    );
+
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(&user.display_name).strong().color(egui::Color32::WHITE));
@@ -336,7 +369,7 @@ fn catalog_screen(
             ui.horizontal(|ui| {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut query)
-                        .hint_text("[ ] Buscar juegos...") // using [ ] instead of emoji to avoid rendering issues
+                        .hint_text(i18n.text("catalog-search-hint")) // using [ ] instead of emoji to avoid rendering issues
                         .desired_width(ui.available_width() - 80.0) // Take up more space
                         .margin(egui::vec2(12.0, 8.0)) // Padding inside the search bar
                 );
@@ -352,7 +385,8 @@ fn catalog_screen(
                 let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let search_btn = ui.add_sized(
                     [60.0, 30.0],
-                    egui::Button::new("Buscar").fill(egui::Color32::from_rgb(0x2c, 0x2c, 0x2c))
+                    egui::Button::new(i18n.text("catalog-search-button"))
+                        .fill(egui::Color32::from_rgb(0x2c, 0x2c, 0x2c))
                 );
                 if search_btn.clicked() || enter_pressed || (search_requested && response.lost_focus()) {
                     search_command = Some(AppCommand::CloseSearch);
@@ -360,19 +394,20 @@ fn catalog_screen(
             });
             ui.separator();
 
-            ui.label(format!(
-                "Mostrando {} de {} juegos",
-                filtered_indices.len(),
-                games.len()
-            ));
+            {
+                let mut args = fluent_bundle::FluentArgs::new();
+                args.set("shown", filtered_indices.len() as i64);
+                args.set("total", games.len() as i64);
+                ui.label(i18n.text_with("catalog-showing-count", args));
+            }
 
             if filtered_indices.is_empty() {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| {
                     if games.is_empty() {
-                        ui.label("No se encontraron juegos disponibles (la API no devolvió ninguno).");
+                        ui.label(i18n.text("catalog-no-games-api"));
                     } else {
-                        ui.label("Ningun juego coincide con la busqueda.");
+                        ui.label(i18n.text("catalog-no-match"));
                     }
                 });
             } else {
@@ -416,9 +451,21 @@ fn catalog_screen(
                         // scroll area follow the active tile so it stays visible without the
                         // user having to drag the touchscreen.
                         if let Some(response) = selected_response {
-                            // Using None instead of Center prevents the ScrollArea from 
-                            // fighting the layout and causing a continuous 1-pixel "vibration".
-                            response.scroll_to_me(None);
+                            // Only scroll when the selection actually changed since the last
+                            // frame. `scroll_to_me` recomputes its delta from the live layout
+                            // every call, and with the renderer's Nearest-neighbor sampling
+                            // even a sub-pixel delta shows up as a visible jitter - calling it
+                            // unconditionally every frame (as before, with align None) was
+                            // still enough to make the whole grid "vibrate" while sitting still.
+                            let scroll_state_id =
+                                egui::Id::new("catalog_grid_last_scrolled_selected");
+                            let already_scrolled =
+                                ctx.data(|d| d.get_temp::<usize>(scroll_state_id))
+                                    == Some(selected);
+                            if !already_scrolled {
+                                response.scroll_to_me(None);
+                                ctx.data_mut(|d| d.insert_temp(scroll_state_id, selected));
+                            }
                         }
                     });
             }
