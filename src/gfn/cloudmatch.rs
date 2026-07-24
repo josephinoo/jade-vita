@@ -228,9 +228,16 @@ pub async fn poll_session(
     let identity = &request.session.identity;
     const MAX_ATTEMPTS: usize = 1800; // 1 hour maximum queue wait time
     const POLL_INTERVAL: Duration = Duration::from_secs(2);
+    // The zone load balancer occasionally answers a single poll with a transient 5xx while a
+    // session is still being seated (observed as an isolated HTTP 503 mid-queue, unrelated to
+    // the session actually failing). Treat a run of these as recoverable instead of aborting a
+    // session that would have come up fine on the next poll; only give up after enough
+    // consecutive server errors that it's clearly not transient.
+    const MAX_CONSECUTIVE_SERVER_ERRORS: usize = 10;
+    let mut consecutive_server_errors = 0usize;
 
     for attempt in 0..MAX_ATTEMPTS {
-        let response = headers::apply_cloudmatch_headers(
+        let response = match headers::apply_cloudmatch_headers(
             client.get(&url),
             request.token,
             &identity.client_id,
@@ -238,7 +245,26 @@ pub async fn poll_session(
         )
         .send()
         .await
-        .with_context(|| format!("CloudMatch poll attempt {attempt} failed"))?;
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("CloudMatch poll attempt {attempt} failed"));
+            }
+        };
+
+        if response.status().is_server_error() {
+            consecutive_server_errors += 1;
+            if consecutive_server_errors > MAX_CONSECUTIVE_SERVER_ERRORS {
+                error_for_status_with_body(response)
+                    .await
+                    .with_context(|| format!("CloudMatch poll attempt {attempt} rejected"))?;
+            }
+            sleep(POLL_INTERVAL).await;
+            continue;
+        }
+        consecutive_server_errors = 0;
+
         let response = error_for_status_with_body(response)
             .await
             .with_context(|| format!("CloudMatch poll attempt {attempt} rejected"))?;

@@ -40,6 +40,8 @@ pub enum AppCommand {
     ToggleConfirmExit,
     CancelConfirmExit,
     ConfirmExitSession,
+    /// Emitted by the catalog screen's language picker.
+    SetLocale(crate::locale::Locale),
 }
 
 impl From<InputCommand> for AppCommand {

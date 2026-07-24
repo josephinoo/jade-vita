@@ -1,59 +1,58 @@
-# Avisos de terceros
+# Third-party notices
 
-Este proyecto reutiliza código y conocimiento de dos proyectos externos, ninguno de los
-cuales se distribuye dentro de este repositorio (viven solo en `reference/`, con gitignore, y
-se usan como referencia de desarrollo).
+This project reuses code and protocol knowledge from two external projects, neither of which
+is distributed inside this repository (they live only under `reference/`, gitignored, and are
+used as development references).
 
 ## green-vita (MPL-2.0)
 
 https://github.com/Day-OS/green-vita
 
-Cliente Rust nativo para Xbox Cloud Gaming en PS Vita. Este proyecto sigue su misma
-arquitectura (SDL2 + egui, empaquetado VPK con `cargo-vita`, build para VitaSDK) y reutiliza
-código puntual bajo los términos de la Mozilla Public License 2.0 (ver `LICENSE`, idéntica
-licencia que usa green-vita):
+A native Rust client for Xbox Cloud Gaming on the PS Vita. This project follows its same
+architecture (SDL2 + egui, VPK packaging with `cargo-vita`, VitaSDK build) and reuses specific
+code under the terms of the Mozilla Public License 2.0 (see `LICENSE`, the same license
+green-vita uses):
 
-- `.cargo/config.toml`, `Makefile`, `tools/vita-*`: adaptados de la configuración de build de
-  green-vita para el target `armv7-sony-vita-newlibeabihf`.
-- `src/shell/egui_painter.rs`: copiado prácticamente sin cambios (renderer genérico de egui
-  sobre SDL2, sin lógica específica de streaming/Xbox).
-- `src/input.rs`: el GUID de mapeo del mando de la Vita para SDL
-  (`register_vita_controller_mapping`) y el id de dispositivo táctil frontal
-  (`FRONT_TOUCH_DEVICE_ID`) están adaptados de green-vita — son detalles de plataforma no
-  documentados en ningún otro sitio.
-- `src/jobs.rs`: copiado sin cambios (helper genérico para sondear una tarea Tokio en segundo
-  plano sin bloquear el bucle de renderizado).
-- `src/safe_memory.rs`: copiado sin cambios (wrapper fino sobre `sceAppUtil*SafeMemory`).
-- `src/gfn/auth.rs`: el esquema de cifrado en reposo de los tokens (ChaCha20-Poly1305 vía
-  `ring`, con la clave guardada en Safe Memory en vez de en el propio archivo) y las funciones
-  `encode_hex`/`decode_hex` están adaptados del almacenamiento de tokens de Xbox de green-vita
+- `.cargo/config.toml`, `Makefile`, `tools/vita-*`: adapted from green-vita's build
+  configuration for the `armv7-sony-vita-newlibeabihf` target.
+- `src/shell/egui_painter.rs`: copied essentially unchanged (a generic egui-over-SDL2
+  renderer, with no streaming/Xbox-specific logic).
+- `src/input.rs`: the Vita controller's SDL mapping GUID
+  (`register_vita_controller_mapping`) and the front touch device id
+  (`FRONT_TOUCH_DEVICE_ID`) are adapted from green-vita — undocumented platform details found
+  nowhere else.
+- `src/jobs.rs`: copied unchanged (a generic helper for polling a background Tokio task
+  without blocking the render loop).
+- `src/safe_memory.rs`: copied unchanged (a thin wrapper over `sceAppUtil*SafeMemory`).
+- `src/gfn/auth.rs`: the token-at-rest encryption scheme (ChaCha20-Poly1305 via `ring`, with
+  the key stored in Safe Memory rather than in the file itself) and the `encode_hex`/
+  `decode_hex` functions are adapted from green-vita's Xbox token storage
   (`src/api_xbox/auth.rs`).
-- `src/app/ui.rs` (`draw_qr`): adaptado de green-vita
-  (`src/app/ui/screens/token_setup.rs`) — dibuja el QR como rectángulos rellenos directamente
-  con el pintor de egui, sin depender de una textura/imagen.
-- `Cargo.toml`: el parche `[patch.crates-io] ring = { git = ".../vita-rust/ring", branch =
-  "v0.17.14-vita" }` es necesario porque el `ring` de crates.io no compila para
-  `armv7-sony-vita-newlibeabihf` (sin fuente de números aleatorios reconocida para ese
-  target) — reutilizado del `Cargo.toml` de green-vita.
+- `src/app/ui.rs` (`draw_qr`): adapted from green-vita
+  (`src/app/ui/screens/token_setup.rs`) — draws the QR code as filled rectangles directly with
+  egui's painter, with no dependency on a texture/image.
+- `Cargo.toml`: the `[patch.crates-io] ring = { git = ".../vita-rust/ring", branch =
+  "v0.17.14-vita" }` patch is needed because crates.io's `ring` doesn't build for
+  `armv7-sony-vita-newlibeabihf` (no recognized random number source for that target) —
+  reused from green-vita's `Cargo.toml`.
 
-Bajo MPL-2.0, cada archivo modificado permanece bajo esa licencia; el resto del proyecto
-puede tener una licencia distinta siempre que los archivos cubiertos se mantengan
-disponibles bajo MPL-2.0 (ver cabecera en cada archivo reutilizado).
+Under MPL-2.0, each modified file remains under that license; the rest of the project may use
+a different license as long as the covered files stay available under MPL-2.0 (see the header
+in each reused file).
 
-## OpenNOW (licencia del proyecto original — ver su repositorio)
+## OpenNOW (original project's license — see its repository)
 
 https://github.com/OpenCloudGaming/OpenNOW
 
-Cliente GFN de código abierto (Electron + streamer nativo en Rust). No se reutiliza código
-de OpenNOW directamente en este repositorio — se usó únicamente como referencia de protocolo
-(autenticación, señalización WebRTC, formato del SDP propietario "NVST", formato de paquetes
-de input) documentada en `docs/protocol-notes.md`. Todo el código Rust de este proyecto que
-implementa esa lógica de protocolo está escrito desde cero.
+An open-source GFN client (Electron + a native Rust streamer). No code from OpenNOW is reused
+directly in this repository — it was used only as a protocol reference (authentication,
+WebRTC signaling, the proprietary "NVST" SDP format, the input packet format), documented in
+`docs/protocol-notes.md`. All Rust code in this project that implements that protocol logic
+is written from scratch.
 
-## `rtc` / `rtc-media` (fork de green-vita para Vita)
+## `rtc` / `rtc-media` (green-vita's Vita fork)
 
-Fase 3 de este proyecto reutilizará el fork de green-vita de los crates `rtc`/`rtc-media`/
-`ring` parcheados para compilar en `armv7-sony-vita-newlibeabihf`
-(https://github.com/Day-OS/rtc, rama `vita`; https://github.com/vita-rust/ring, rama
-`v0.17.14-vita`). Se documentará aquí de nuevo cuando se añadan como dependencias en
-`Cargo.toml`.
+This project uses green-vita's fork of the `rtc`/`rtc-media`/`ring` crates, patched to build
+for `armv7-sony-vita-newlibeabihf` (https://github.com/Day-OS/rtc, `vita` branch;
+https://github.com/vita-rust/ring, `v0.17.14-vita` branch), for the WebRTC peer connection
+(ICE/DTLS/SRTP) and H.264 RTP depacketization.
